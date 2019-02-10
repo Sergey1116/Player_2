@@ -16,8 +16,6 @@ namespace MusicPlayer
         public bool _isLocked { get; private set; }
         public bool _isPlaying { get; private set; }
 
-        private static CancellationTokenSource cts = new CancellationTokenSource();
-
         private int _volume;
         private SoundPlayer player;
 
@@ -52,6 +50,8 @@ namespace MusicPlayer
         public event Action<Player> SongStopEvent;
         public event Action<Player> VolumeEvent;
         public event Action<Player> LockEvent;
+        public event Action<Exception> OnError;
+        public event Action<PlayerException> OnWarning;
 
 
         public void VolumeUp()
@@ -104,33 +104,59 @@ namespace MusicPlayer
 
         public async void Play()
         {
-            if (!_isLocked && Songs.Count > 0)
-            {
-                _isPlaying = true;
-            }
-
-            if (_isPlaying)
-            {
-                cts = new CancellationTokenSource();
-                foreach (var song in Songs)
+            
+                if (!_isLocked && Songs.Count > 0)
                 {
-                    if (cts.Token.IsCancellationRequested)
-                        break;
-                    await Task.Run(() => {
-                        song.Playing = true;
-                        SongStartedEvent?.Invoke(this);
-
-                        using (player = new SoundPlayer())
-                        {
-                            player.SoundLocation = song.Path;
-                            player.PlaySync();
-                        }
-                    });
-                    song.Playing = false;
+                    _isPlaying = true;
                 }
-            }
 
-            _isPlaying = false;
+                if (_isPlaying)
+                {
+                    foreach (var song in Songs)
+                    {
+                        if (!_isPlaying)
+                            break;
+
+                    try
+                    {
+                        await Task.Run(() =>
+                            {
+                                song.Playing = true;
+                                SongStartedEvent?.Invoke(this);
+
+                                using (player = new SoundPlayer())
+                                {
+                                    player.SoundLocation = song.Path;
+                                    try
+                                    {
+                                        player.PlaySync();
+                                    }
+                                    catch (FileNotFoundException ex)
+                                    {
+                                        throw new FailedToPlayException(ex.Message + $" {song.Path}") { Path = song.Path };
+                                    }
+                                    catch (InvalidOperationException ex)
+                                    {
+                                        throw new FailedToPlayException(ex.Message + $" {song.Path}") { Path = song.Path };
+                                    }
+                                }
+                            });
+                    }
+                    catch (PlayerException ex)
+                    {
+                        OnWarning?.Invoke(ex);
+                    }
+
+                    catch (Exception ex)
+                    {
+                        OnError?.Invoke(ex);
+                    }
+
+
+                    song.Playing = false;
+                    }
+                    _isPlaying = false;
+                }
         }
 
         public void Stop()
@@ -138,7 +164,6 @@ namespace MusicPlayer
             if (!_isLocked)
             {
                 player?.Stop();
-                cts.Cancel();
                 _isPlaying = false;
                 SongStopEvent?.Invoke(this);
             }

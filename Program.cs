@@ -13,6 +13,8 @@ namespace MusicPlayer
             player.VolumeEvent += ShowInfo;
             player.LockEvent += ShowInfo;
             player.SongStopEvent += ShowInfo;
+            player.OnError += ShowExeption;
+            player.OnWarning += ShowExeptionYellow;
 
             ShowInfo(player);
 
@@ -61,6 +63,18 @@ namespace MusicPlayer
             Console.WriteLine("Start = 1, Stop = 2, LoadPlaylist = 3, LoadFolder = 4.");
             Console.ResetColor();
             Console.WriteLine("Enter the number:");
+        }
+
+        private static void ShowExeption(Exception ex)
+        {
+            Console.WriteLine($"{ex.Message}");
+        }
+
+        private static void ShowExeptionYellow(Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"{ex.Message} ");
+            Console.ResetColor();
         }
     }
 }
