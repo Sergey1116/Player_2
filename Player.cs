@@ -1,6 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Media;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Xml.Serialization;
 
 namespace MusicPlayer
 {
@@ -10,11 +14,11 @@ namespace MusicPlayer
         const int MAX_VOLUME = 100;
 
         public bool _isLocked { get; private set; }
-
-
-        private bool _isPlaying;
+        public bool _isPlaying { get; private set; }
 
         private int _volume;
+        private SoundPlayer player;
+
         public int Volume
         {
             get
@@ -39,13 +43,15 @@ namespace MusicPlayer
             }
         }
 
-        public List<Song> Songs { get; } = new List<Song>();
-        //public Song PlayingSong { get; private set; }
+        public List<Song> Songs { get; private set; } = new List<Song>();
 
         public event Action<Player> SongsListChangedEvent;
         public event Action<Player> SongStartedEvent;
+        public event Action<Player> SongStopEvent;
         public event Action<Player> VolumeEvent;
         public event Action<Player> LockEvent;
+        public event Action<Exception> OnError;
+        public event Action<PlayerException> OnWarning;
 
 
         public void VolumeUp()
@@ -77,6 +83,7 @@ namespace MusicPlayer
 
         public void Load(string source)
         {
+            Clear();
             var dirInfo = new DirectoryInfo(source);
 
             if (dirInfo.Exists)
@@ -92,44 +99,74 @@ namespace MusicPlayer
                     Songs.Add(song);
                 }
             }
-
             SongsListChangedEvent?.Invoke(this);
         }
 
-        public void Play()
+        public async void Play()
         {
-            if (!_isLocked && Songs.Count > 0)
-            {
-                _isPlaying = true;
-            }
-
-            if (_isPlaying)
-            {
-                foreach (var song in Songs)
+            
+                if (!_isLocked && Songs.Count > 0)
                 {
-                    song.Playing = true;
-                    SongStartedEvent?.Invoke(this);
-
-                    using (System.Media.SoundPlayer player = new System.Media.SoundPlayer())
-                    {
-                        player.SoundLocation = song.Path;
-                        player.PlaySync();
-                    }
-                    song.Playing = false;
+                    _isPlaying = true;
                 }
-            }
 
-            _isPlaying = false;
+                if (_isPlaying)
+                {
+                    foreach (var song in Songs)
+                    {
+                        if (!_isPlaying)
+                            break;
+
+                    try
+                    {
+                        await Task.Run(() =>
+                            {
+                                song.Playing = true;
+                                SongStartedEvent?.Invoke(this);
+
+                                using (player = new SoundPlayer())
+                                {
+                                    player.SoundLocation = song.Path;
+                                    try
+                                    {
+                                        player.PlaySync();
+                                    }
+                                    catch (FileNotFoundException ex)
+                                    {
+                                        throw new FailedToPlayException(ex.Message + $" {song.Path}") { Path = song.Path };
+                                    }
+                                    catch (InvalidOperationException ex)
+                                    {
+                                        throw new FailedToPlayException(ex.Message + $" {song.Path}") { Path = song.Path };
+                                    }
+                                }
+                            });
+                    }
+                    catch (PlayerException ex)
+                    {
+                        OnWarning?.Invoke(ex);
+                    }
+
+                    catch (Exception ex)
+                    {
+                        OnError?.Invoke(ex);
+                    }
+
+
+                    song.Playing = false;
+                    }
+                    _isPlaying = false;
+                }
         }
 
-        public bool Stop()
+        public void Stop()
         {
             if (!_isLocked)
             {
+                player?.Stop();
                 _isPlaying = false;
+                SongStopEvent?.Invoke(this);
             }
-
-            return _isPlaying;
         }
 
         public void Clear()
@@ -147,6 +184,30 @@ namespace MusicPlayer
         {
             _isLocked = false;
             LockEvent?.Invoke(this);
+        }
+
+        public void SaveAsPlaylist(string name)
+        {
+            XmlSerializer serializer = new XmlSerializer(Songs.GetType());
+            using (FileStream fs = new FileStream($"{name}.xml", FileMode.OpenOrCreate))
+            {
+                serializer.Serialize(fs, Songs);
+            }
+        }
+
+        public void LoadPlaylist(string name)
+        {
+            Clear();
+            XmlSerializer serializer = new XmlSerializer(Songs.GetType());
+            if (File.Exists($"{name}.xml"))
+            {
+                using (FileStream fs = new FileStream($"{name}.xml", FileMode.OpenOrCreate))
+                {
+                    var newSongs = (List<Song>)serializer.Deserialize(fs);
+                    Songs = newSongs;
+                }
+            }
+            SongsListChangedEvent?.Invoke(this);
         }
     }
 }
